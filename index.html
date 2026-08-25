@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talk to AbdulGPT</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <!-- Consider adding an integrity="sha384-..." attribute (Subresource Integrity)
+       once you've generated the hash for the pinned version, or self-host this file. -->
+
+  <style>
+    body {
+      background-color: #0f172a;
+      color: #ffffff;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      height: 100vh;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+    }
+    .card {
+      background-color: #1e293b;
+      padding: 2.5rem;
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      width: 320px;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-top: 0;
+      margin-bottom: 1.5rem;
+    }
+    button {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      padding: 0.85rem 1.5rem;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 100%;
+      transition: background-color 0.2s;
+    }
+    button:hover { background-color: #1d4ed8; }
+    button:disabled { background-color: #64748b; cursor: not-allowed; }
+    button.disconnect { background-color: #ef4444; }
+    button.disconnect:hover { background-color: #dc2626; }
+
+    #status {
+      margin-top: 1.5rem;
+      font-size: 0.95rem;
+      color: #94a3b8;
+    }
+    #status-val {
+      color: #38bdf8;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>Talk to AbdulGPT</h1>
+  <button id="actionBtn" onclick="toggleConnection()">Start Conversation</button>
+  <div id="status">Status: <span id="status-val">Disconnected</span></div>
+</div>
+
+<script>
+  const BACKEND_URL = "http://127.0.0.1:8000";
+  const BACKEND_API_KEY = "my-super-secret-key-12345";
+
+  let room = null;
+  let isConnected = false;
+
+  function cleanupAudioElements() {
+    document.querySelectorAll('audio[id^="audio-"]').forEach(el => el.remove());
+  }
+
+  async function toggleConnection() {
+    const btn = document.getElementById("actionBtn");
+    const statusVal = document.getElementById("status-val");
+
+    if (isConnected) {
+      if (room) {
+        await room.disconnect();
+      }
+      return;
+    }
+
+    btn.disabled = true;
+    statusVal.innerText = "Getting token...";
+
+    try {
+      // 2. Fetch token from FastAPI backend, now with required auth header
+      const response = await fetch(`${BACKEND_URL}/api/get-token`, {
+        headers: { "x-api-key": BACKEND_API_KEY },
+      });
+      if (!response.ok) {
+        throw new Error(`Token request failed: ${response.status}`);
+      }
+      const data = await response.json();
+
+      statusVal.innerText = "Connecting to LiveKit...";
+
+      const LK = window.LivekitClient;
+
+      room = new LK.Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
+
+      // 3. Attach and play incoming audio tracks; key by track SID to avoid
+      //    duplicate DOM ids if a participant reconnects or has multiple tracks
+      room.on(LK.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === LK.Track.Kind.Audio) {
+          const audioElement = track.attach();
+          audioElement.id = `audio-${publication.trackSid}`;
+          document.body.appendChild(audioElement);
+
+          audioElement.play().catch((err) => {
+            console.warn("Autoplay error or interaction needed:", err);
+          });
+        }
+      });
+
+      room.on(LK.RoomEvent.TrackUnsubscribed, (track) => {
+        track.detach().forEach(el => el.remove());
+      });
+
+      room.on(LK.RoomEvent.Disconnected, () => {
+        isConnected = false;
+        cleanupAudioElements(); // safety net for any tracks that didn't unsubscribe cleanly
+        btn.innerText = "Start Conversation";
+        btn.classList.remove("disconnect");
+        btn.disabled = false;
+        statusVal.innerText = "Disconnected";
+      });
+
+      // 4. Connect to LiveKit server
+      await room.connect(data.serverUrl, data.token);
+
+      // 5. Enable microphone with explicit DSP flags
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true, {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        });
+      } catch (micErr) {
+        // Room connected but mic failed (e.g. permission denied) —
+        // don't leave the user in a half-connected state
+        console.error("Microphone error:", micErr);
+        await room.disconnect();
+        statusVal.innerText = "Microphone permission denied";
+        btn.disabled = false;
+        return;
+      }
+
+      isConnected = true;
+      statusVal.innerText = "Connected & Listening";
+      btn.innerText = "End Conversation";
+      btn.classList.add("disconnect");
+      btn.disabled = false;
+
+    } catch (err) {
+      console.error("Connection error:", err);
+      statusVal.innerText = "Error Connecting";
+      btn.disabled = false;
+    }
+  }
+</script>
+
+</body>
+</html>
