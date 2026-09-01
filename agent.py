@@ -54,7 +54,13 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         stt=groq.STT(model="whisper-large-v3"),
         llm=groq.LLM(model="openai/gpt-oss-120b"),
-        tts=elevenlabs.TTS(),
+        tts=elevenlabs.TTS(
+            model="eleven_multilingual_v2",
+            voice=elevenlabs.Voice(
+                id="21m00Tcm4TlvDq8ikWAM",
+                name="Rachel"
+            ),
+        ),
         turn_detection=TurnDetector(),
     )
 
